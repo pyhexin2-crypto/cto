@@ -85,9 +85,13 @@ scraper.save_to_excel(data, "my_limit_up_stocks.xlsx")
 
 ## 输出文件
 
-脚本运行后会生成 `gem_limit_up_stocks.xlsx` 文件，包含两个工作表：
+脚本运行后会在 `output/gem_limit_up_stocks.xlsx` 位置生成结果文件，包含以下工作表：
 1. **涨停股票数据**: 详细的涨停记录
-2. **统计汇总**: 各种统计信息
+2. **统计汇总**: 总体核心指标
+3. **按股票统计**: 各股票的涨停次数与涨幅统计
+4. **按日期统计**: 每个交易日的涨停数量
+
+> 即使在指定时间范围内未发现涨停记录，脚本也会生成包含提示信息的 Excel 文件，方便确认结果。
 
 ### 示例文件
 项目包含一个示例Excel文件 `gem_limit_up_stocks_sample.xlsx`，展示输出格式和内容结构。

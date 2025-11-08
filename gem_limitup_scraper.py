@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import time
 import os
 import logging
+from openpyxl.utils import get_column_letter
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,7 +25,10 @@ class GEMLimitUpScraper:
     def __init__(self):
         """初始化爬虫"""
         self.limit_up_threshold = 19.0  # 涨停阈值（19%以上）
-        self.output_file = "gem_limit_up_stocks.xlsx"
+        # Excel 输出文件将保存到项目目录下的 output/gem_limit_up_stocks.xlsx
+        self.output_directory = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+        self.output_filename = "gem_limit_up_stocks.xlsx"
+        self.output_file = os.path.join(self.output_directory, self.output_filename)
         
     def get_gem_stock_list(self):
         """获取创业板股票列表"""
@@ -140,40 +144,49 @@ class GEMLimitUpScraper:
     
     def save_to_excel(self, data, filename=None):
         """保存数据到Excel文件"""
-        if filename is None:
-            filename = self.output_file
+        if filename is None or not str(filename).strip():
+            filename = self.output_filename
+            output_path = os.path.join(self.output_directory, filename)
+        else:
+            filename = str(filename)
+            output_path = filename if os.path.isabs(filename) else os.path.abspath(filename)
+        target_dir = os.path.dirname(output_path)
+        if target_dir:
+            os.makedirs(target_dir, exist_ok=True)
         
-        if data.empty:
-            logger.warning("没有数据可保存")
-            return
+        self.output_file = output_path
         
         try:
-            # 创建Excel writer对象
-            with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-                # 保存主数据
-                data.to_excel(writer, sheet_name='涨停股票数据', index=False)
-                
-                # 创建统计汇总表
-                summary_data = self.create_summary_data(data)
-                summary_data.to_excel(writer, sheet_name='统计汇总', index=False)
-                
-                # 获取工作表对象并调整列宽
-                worksheet = writer.sheets['涨停股票数据']
-                self.adjust_column_width(worksheet, data)
-                
-                worksheet_summary = writer.sheets['统计汇总']
-                self.adjust_column_width(worksheet_summary, summary_data)
+            if data is None or data.empty:
+                logger.warning("没有数据可保存，将生成包含提示信息的Excel文件")
+                placeholder = pd.DataFrame([{"提示": "在指定的时间范围内未找到涨停记录"}])
+                with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+                    placeholder.to_excel(writer, sheet_name='统计汇总', index=False)
+                    self.adjust_column_width(writer.sheets['统计汇总'], placeholder)
+            else:
+                with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+                    data.to_excel(writer, sheet_name='涨停股票数据', index=False)
+                    self.adjust_column_width(writer.sheets['涨停股票数据'], data)
+                    
+                    summary_sheets = self.create_summary_data(data)
+                    for sheet_name, sheet_df in summary_sheets.items():
+                        if sheet_df is None or sheet_df.empty:
+                            continue
+                        sheet_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        self.adjust_column_width(writer.sheets[sheet_name], sheet_df)
             
-            logger.info(f"数据已保存到 {filename}")
-            logger.info(f"文件路径: {os.path.abspath(filename)}")
-            
+            abs_path = os.path.abspath(output_path)
+            logger.info(f"数据已保存到 {abs_path}")
+            return output_path
+        
         except Exception as e:
-            logger.error(f"保存Excel文件失败: {e}")
+            logger.error(f"保存Excel文件失败: {e}", exc_info=True)
+            raise
     
     def create_summary_data(self, data):
         """创建统计汇总数据"""
-        if data.empty:
-            return pd.DataFrame()
+        if data is None or data.empty:
+            return {}
         
         summary_records = []
         
@@ -218,10 +231,17 @@ class GEMLimitUpScraper:
         
         summary_df = pd.DataFrame(summary_records)
         
-        return summary_df
+        return {
+            '统计汇总': summary_df,
+            '按股票统计': stock_stats,
+            '按日期统计': date_stats
+        }
     
     def adjust_column_width(self, worksheet, data):
         """调整Excel列宽"""
+        if data is None or getattr(data, 'empty', False):
+            return
+        
         for column in data.columns:
             max_length = max(
                 data[column].astype(str).map(len).max(),
@@ -229,7 +249,8 @@ class GEMLimitUpScraper:
             )
             # 设置合适的列宽，最小10，最大30
             adjusted_width = min(max(max_length + 2, 10), 30)
-            worksheet.column_dimensions[worksheet.cell(row=1, column=data.columns.get_loc(column) + 1).column_letter].width = adjusted_width
+            column_letter = get_column_letter(data.columns.get_loc(column) + 1)
+            worksheet.column_dimensions[column_letter].width = adjusted_width
     
     def run(self, days_back=30):
         """运行爬虫"""
@@ -238,10 +259,11 @@ class GEMLimitUpScraper:
         # 爬取数据
         result_data = self.scrape_limit_up_stocks(days_back)
         
-        # 保存到Excel
-        if not result_data.empty:
-            self.save_to_excel(result_data)
-            
+        # 保存到Excel（无论是否有数据都会生成文件）
+        output_path = self.save_to_excel(result_data)
+        logger.info(f"Excel 输出文件: {output_path}")
+        
+        if result_data is not None and not result_data.empty:
             # 显示部分结果
             print("\n=== 涨停股票数据预览 ===")
             print(result_data.head(10).to_string(index=False))
@@ -251,7 +273,6 @@ class GEMLimitUpScraper:
             print(f"涉及股票数量: {result_data['股票代码'].nunique()}")
             print(f"平均涨幅: {result_data['涨跌幅(%)'].mean():.2f}%")
             print(f"最大涨幅: {result_data['涨跌幅(%)'].max():.2f}%")
-            
         else:
             logger.warning("未找到任何涨停记录")
         
@@ -271,7 +292,7 @@ def main():
         if result is not None and not result.empty:
             print(f"\n✅ 成功！数据已保存到 {scraper.output_file}")
         else:
-            print("\n⚠️  未发现涨停数据")
+            print(f"\nℹ️  未发现涨停数据，本次仍生成结果文件: {scraper.output_file}")
             
     except Exception as e:
         logger.error(f"程序执行出错: {e}")
